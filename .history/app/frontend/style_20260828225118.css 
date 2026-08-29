@@ -1,0 +1,23 @@
+body {
+  font-family: -apple-system, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  margin: 0;
+}
+.card {
+  background: #1e293b;
+  padding: 2.5rem 3rem;
+  border-radius: 12px;
+  text-align: center;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+}
+h1 { color: #38bdf8; margin-bottom: 0.5rem; }
+.status { color: #4ade80; font-weight: 600; }
+.count { font-size: 2.5rem; color: #f8fafc; margin: 1rem 0; }
+p { color: #94a3b8; }
+a { color: #38bdf8; text-decoration: none; }
+.error { color: #f87171; font-size: 0.85rem; }
