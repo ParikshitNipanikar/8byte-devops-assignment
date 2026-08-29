@@ -1,4 +1,5 @@
-
+cd ~/8byte-devops-assignment
+cat > .github/workflows/deploy.yml << 'EOF'
 name: Deploy
 
 on:

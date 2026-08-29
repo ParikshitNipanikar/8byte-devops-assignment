@@ -64,7 +64,8 @@ jobs:
           kubectl rollout status deployment/backend --timeout=120s
           kubectl rollout status deployment/frontend --timeout=120s
 
-  deploy-production:
+
+deploy-production:
     needs: deploy-staging
     runs-on: ubuntu-latest
     environment: production
