@@ -1,4 +1,4 @@
-
+cat > test_app.py << 'EOF'
 import pytest
 from app import app
 
@@ -22,3 +22,4 @@ def test_visits_endpoint_integration(client):
     assert data["status"] == "ok"
     assert isinstance(data["count"], int)
     assert data["count"] > 0
+EOF
