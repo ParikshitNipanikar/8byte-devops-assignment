@@ -35,5 +35,6 @@ jobs:
       - name: Build and push frontend
         working-directory: app/frontend
         run: |
-          docker build --platform linux/amd64 -t ${{ env.FRONTEND_ECR }}:latest .
+          docker build --platform linux/amd64 -t ${{ env.FRONTEND_ECR }}:${{ github.sha }} -t ${{ env.FRONTEND_ECR }}:latest .
+          docker push ${{ env.FRONTEND_ECR }}:${{ github.sha }}
           docker push ${{ env.FRONTEND_ECR }}:latest
