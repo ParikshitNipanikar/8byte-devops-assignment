@@ -4,3 +4,4 @@
 .terraform.lock.hcl
 *.tfvars
 .history/terraform/cloudwatch-readonly-policy.json
+.history/
