@@ -38,28 +38,9 @@ Before starting, you'll need:
 ---
 
 ## Architecture
+
+
 ![VPC architecture](images/arch.jpg)
-
-                    ┌─────────────┐
-                    │  Internet   │
-                    └──────┬──────┘
-                           │
-                    ┌──────▼──────┐
-                    │     ALB     │   (public subnets)
-                    └──────┬──────┘
-                           │
-        ┌──────────────────┼──────────────────┐
-        │                                      │
-  ┌─────▼─────┐                          ┌─────▼─────┐
-  │  Frontend  │                          │  Backend  │
-  │   (nginx)  │                          │  (Flask)  │
-  └────────────┘                          └─────┬─────┘
-   private subnets                               │
-                                            ┌─────▼─────┐
-                                            │    RDS    │   (private, no public access)
-                                            │ PostgreSQL│
-                                            └───────────┘
-
 
 Everything runs on EKS — 2 worker nodes (t3.medium), across 2 Availability Zones. The frontend and backend are separate Deployments with separate Services; only the backend ever talks to the database.
 
