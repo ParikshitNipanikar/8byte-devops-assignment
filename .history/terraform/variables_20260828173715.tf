@@ -1,1 +1,0 @@
-variable "db_password"
