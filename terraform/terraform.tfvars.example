@@ -6,4 +6,5 @@ cloudwatch_observability_addon_version = "v6.6.0-eksbuild.1"
 cloudwatch_log_retention_days           = 7
 eks_node_instance_types                = ["m7i-flex.large"]
 rds_backup_retention_days              = 1
-github_repository                      = "YOUR_GITHUB_USERNAME/8byte-devops-assignment"
+# Immutable GitHub OIDC identity: OWNER@OWNER_ID/REPOSITORY@REPOSITORY_ID
+github_repository                      = "YOUR_GITHUB_USERNAME@YOUR_GITHUB_OWNER_ID/8byte-devops-assignment@YOUR_REPOSITORY_ID"

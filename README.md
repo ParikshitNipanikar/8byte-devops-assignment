@@ -74,7 +74,7 @@ Create the ignored, account-specific variables file:
 ```bash
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
 sed -i '' "s/REPLACE_WITH_AWS_ACCOUNT_ID/$ACCOUNT_ID/" terraform/terraform.tfvars
-sed -i '' "s|YOUR_GITHUB_USERNAME/8byte-devops-assignment|ParikshitNipanikar/8byte-devops-assignment|" terraform/terraform.tfvars
+sed -i '' "s|YOUR_GITHUB_USERNAME@YOUR_GITHUB_OWNER_ID/8byte-devops-assignment@YOUR_REPOSITORY_ID|ParikshitNipanikar@111178325/8byte-devops-assignment@1350420946|" terraform/terraform.tfvars
 ```
 
 Initialize, validate, review, and apply:

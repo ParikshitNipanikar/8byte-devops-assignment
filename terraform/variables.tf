@@ -45,7 +45,7 @@ variable "rds_backup_retention_days" {
 }
 
 variable "github_repository" {
-  description = "GitHub owner/repository allowed to assume the CI/CD role"
+  description = "Immutable GitHub OIDC repository identity in OWNER@OWNER_ID/REPOSITORY@REPOSITORY_ID format"
   type        = string
-  default     = "ParikshitNipanikar/8byte-devops-assignment"
+  default     = "ParikshitNipanikar@111178325/8byte-devops-assignment@1350420946"
 }

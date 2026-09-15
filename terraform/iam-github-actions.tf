@@ -26,7 +26,9 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
     condition {
       test     = "StringLike"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:*"]
+      # GitHub repositories created after 2026-07-15 include immutable owner
+      # and repository IDs in the OIDC subject.
+      values = ["repo:${var.github_repository}:*"]
     }
   }
 }
