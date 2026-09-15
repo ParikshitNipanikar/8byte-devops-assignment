@@ -1,0 +1,38 @@
+backend:
+  replicaCount: 2
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+
+frontend:
+  replicaCount: 2
+  image:
+    repository: ""
+    tag: ""
+    pullPolicy: IfNotPresent
+
+database:
+  host: ""
+  port: "5432"
+  name: appdb
+  user: dbadmin
+  passwordSecretName: db-credentials
+
+postgresExporter:
+  enabled: true
+  image:
+    repository: quay.io/prometheuscommunity/postgres-exporter
+    tag: v0.20.1
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+ingress:
+  enabled: true
+  scheme: internet-facing

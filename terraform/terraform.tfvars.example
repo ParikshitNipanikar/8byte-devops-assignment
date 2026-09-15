@@ -1,0 +1,9 @@
+aws_account_id = "REPLACE_WITH_AWS_ACCOUNT_ID"
+aws_region     = "ap-south-1"
+
+eks_version                             = "1.36"
+cloudwatch_observability_addon_version = "v6.6.0-eksbuild.1"
+cloudwatch_log_retention_days           = 7
+eks_node_instance_types                = ["m7i-flex.large"]
+rds_backup_retention_days              = 1
+github_repository                      = "YOUR_GITHUB_USERNAME/8byte-devops-assignment"

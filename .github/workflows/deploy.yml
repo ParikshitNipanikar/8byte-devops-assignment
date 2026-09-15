@@ -1,85 +1,125 @@
 name: Deploy
+
 on:
   push:
     branches: [main]
+
+# Required for GitHub OIDC authentication with AWS.
+permissions:
+  contents: read
+  id-token: write
+
 env:
   AWS_REGION: ap-south-1
-  BACKEND_ECR: 304106859365.dkr.ecr.ap-south-1.amazonaws.com/8byte-app
-  FRONTEND_ECR: 304106859365.dkr.ecr.ap-south-1.amazonaws.com/8byte-frontend
   EKS_CLUSTER: 8byte-eks
+  AWS_ROLE: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/8byte-github-actions
+  IMAGE_TAG: ${{ github.sha }}-${{ github.run_attempt }}
+  BACKEND_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/8byte-app:${{ github.sha }}-${{ github.run_attempt }}
+  FRONTEND_IMAGE: ${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/8byte-frontend:${{ github.sha }}-${{ github.run_attempt }}
+
 jobs:
-  build-and-push:
+  # 1. Build, scan, and push both images.
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Connect to AWS
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ env.AWS_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
+
       - name: Login to ECR
         uses: aws-actions/amazon-ecr-login@v2
-      - name: Build and push backend
-        working-directory: app/backend
+
+      - name: Build images
         run: |
-          docker build --platform linux/amd64 -t ${{ env.BACKEND_ECR }}:${{ github.sha }} .
-          docker push ${{ env.BACKEND_ECR }}:${{ github.sha }}
-      - name: Build and push frontend
-        working-directory: app/frontend
+          docker build --platform linux/amd64 -t $BACKEND_IMAGE app/backend
+          docker build --platform linux/amd64 -t $FRONTEND_IMAGE app/frontend
+
+      - name: Scan backend image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.BACKEND_IMAGE }}
+          scanners: vuln
+          ignore-unfixed: true
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+
+      - name: Scan frontend image
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.FRONTEND_IMAGE }}
+          scanners: vuln
+          ignore-unfixed: true
+          exit-code: "1"
+          severity: HIGH,CRITICAL
+
+      - name: Push images
         run: |
-          docker build --platform linux/amd64 -t ${{ env.FRONTEND_ECR }}:${{ github.sha }} .
-          docker push ${{ env.FRONTEND_ECR }}:${{ github.sha }}
-  deploy-staging:
-    needs: build-and-push
+          docker push $BACKEND_IMAGE
+          docker push $FRONTEND_IMAGE
+
+  # 2. Deploy automatically to staging.
+  staging:
+    needs: build
     runs-on: ubuntu-latest
     environment: staging
     steps:
       - uses: actions/checkout@v4
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Connect to AWS
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ env.AWS_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
-      - name: Set image tags in manifests
+
+      - name: Deploy application
         run: |
-          sed -i "s|${{ env.BACKEND_ECR }}:IMAGE_TAG|${{ env.BACKEND_ECR }}:${{ github.sha }}|g" k8s/backend-deployment.yaml
-          sed -i "s|${{ env.FRONTEND_ECR }}:IMAGE_TAG|${{ env.FRONTEND_ECR }}:${{ github.sha }}|g" k8s/frontend-deployment.yaml
-      - name: Deploy to cluster
-        run: kubectl apply -f k8s/
-      - name: Verify rollout
-        run: |
-          kubectl rollout status deployment/backend --timeout=120s
-          kubectl rollout status deployment/frontend --timeout=120s
-  deploy-production:
-    needs: deploy-staging
+          aws eks update-kubeconfig --name $EKS_CLUSTER --region $AWS_REGION
+          helm upgrade --install 8byte-app helm/8byte-app \
+            --namespace default \
+            --set-string backend.image.repository=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/8byte-app \
+            --set-string backend.image.tag=$IMAGE_TAG \
+            --set-string frontend.image.repository=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/8byte-frontend \
+            --set-string frontend.image.tag=$IMAGE_TAG \
+            --set-string database.host=${{ vars.RDS_HOST }} \
+            --rollback-on-failure --wait --timeout 10m
+
+  # 3. The production Environment supplies the manual approval gate.
+  production:
+    needs: staging
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: Connect to AWS
+        uses: aws-actions/configure-aws-credentials@v6.2.3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          role-to-assume: ${{ env.AWS_ROLE }}
           aws-region: ${{ env.AWS_REGION }}
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER }} --region ${{ env.AWS_REGION }}
-      - name: Set image tags in manifests
+
+      - name: Deploy application
         run: |
-          sed -i "s|${{ env.BACKEND_ECR }}:IMAGE_TAG|${{ env.BACKEND_ECR }}:${{ github.sha }}|g" k8s/backend-deployment.yaml
-          sed -i "s|${{ env.FRONTEND_ECR }}:IMAGE_TAG|${{ env.FRONTEND_ECR }}:${{ github.sha }}|g" k8s/frontend-deployment.yaml
-      - name: Deploy to production
-        run: kubectl apply -f k8s/
-      - name: Verify rollout
-        run: |
-          kubectl rollout status deployment/backend --timeout=120s
-          kubectl rollout status deployment/frontend --timeout=120s
-  notify-on-failure:
-    needs: [build-and-push, deploy-staging, deploy-production]
+          aws eks update-kubeconfig --name $EKS_CLUSTER --region $AWS_REGION
+          helm upgrade --install 8byte-app helm/8byte-app \
+            --namespace default \
+            --set-string backend.image.repository=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/8byte-app \
+            --set-string backend.image.tag=$IMAGE_TAG \
+            --set-string frontend.image.repository=${{ vars.AWS_ACCOUNT_ID }}.dkr.ecr.ap-south-1.amazonaws.com/8byte-frontend \
+            --set-string frontend.image.tag=$IMAGE_TAG \
+            --set-string database.host=${{ vars.RDS_HOST }} \
+            --rollback-on-failure --wait --timeout 10m
+
+  # 4. Send one email if any deployment job fails.
+  notify:
+    needs: [build, staging, production]
     if: failure()
     runs-on: ubuntu-latest
     steps:
@@ -90,7 +130,7 @@ jobs:
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "Deploy Failed: ${{ github.repository }}"
+          subject: "Deployment failed: ${{ github.repository }}"
           to: ${{ vars.NOTIFY_EMAIL }}
           from: GitHub Actions
-          body: "The deploy workflow failed on commit ${{ github.sha }} in ${{ github.repository }}. Check the run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body: "Open the failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

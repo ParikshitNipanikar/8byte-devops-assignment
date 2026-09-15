@@ -1,5 +1,7 @@
 
 terraform {
+  required_version = ">= 1.10, < 2.0"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
@@ -8,12 +10,33 @@ terraform {
   }
 }
 
-provider "aws" {
-  region = "ap-south-1"
+variable "aws_account_id" {
+  description = "AWS account that Terraform is allowed to modify"
+  type        = string
 }
 
+variable "aws_region" {
+  description = "AWS region for the state bucket"
+  type        = string
+  default     = "ap-south-1"
+}
+
+provider "aws" {
+  region              = var.aws_region
+  allowed_account_ids = [var.aws_account_id]
+
+  default_tags {
+    tags = {
+      Project   = "8byte-devops-assignment"
+      ManagedBy = "Terraform"
+    }
+  }
+}
+
+data "aws_caller_identity" "current" {}
+
 resource "aws_s3_bucket" "terraform_state" {
-  bucket = "8byte-terraform-state-304106859365"
+  bucket = "8byte-terraform-state-${data.aws_caller_identity.current.account_id}"
 
   lifecycle {
     prevent_destroy = true
@@ -51,17 +74,7 @@ resource "aws_s3_bucket_public_access_block" "terraform_state" {
   restrict_public_buckets = true
 }
 
-resource "aws_dynamodb_table" "terraform_lock" {
-  name         = "terraform-state-lock"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "LockID"
-
-  attribute {
-    name = "LockID"
-    type = "S"
-  }
-
-  tags = {
-    Name = "8byte-terraform-lock"
-  }
+output "state_bucket_name" {
+  description = "S3 bucket used by the main Terraform configuration"
+  value       = aws_s3_bucket.terraform_state.id
 }

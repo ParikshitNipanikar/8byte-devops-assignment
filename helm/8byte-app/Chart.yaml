@@ -1,0 +1,6 @@
+apiVersion: v2
+name: 8byte-app
+description: Frontend, backend, services, and ALB ingress for the 8Byte assignment
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

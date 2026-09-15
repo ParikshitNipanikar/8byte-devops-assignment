@@ -1,0 +1,2 @@
+aws_account_id = "REPLACE_WITH_AWS_ACCOUNT_ID"
+aws_region     = "ap-south-1"

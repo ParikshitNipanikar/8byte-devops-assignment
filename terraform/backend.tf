@@ -1,10 +1,9 @@
-
 terraform {
   backend "s3" {
-    bucket         = "8byte-terraform-state-304106859365"
-    key            = "assignment/terraform.tfstate"
-    region         = "ap-south-1"
-    dynamodb_table = "terraform-state-lock"
-    encrypt        = true
+    bucket       = "8byte-terraform-state-385904685559"
+    key          = "assignment/terraform.tfstate"
+    region       = "ap-south-1"
+    encrypt      = true
+    use_lockfile = true
   }
 }

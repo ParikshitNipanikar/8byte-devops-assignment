@@ -1,19 +1,36 @@
 
 terraform {
+  required_version = ">= 1.10, < 2.0"
+
   required_providers {
     aws = {
       source  = "hashicorp/aws"
       version = "~> 5.0"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
 provider "aws" {
-  region = "ap-south-1"
+  region              = var.aws_region
+  allowed_account_ids = [var.aws_account_id]
+
+  default_tags {
+    tags = {
+      Project     = "8byte-devops-assignment"
+      Environment = "demo"
+      ManagedBy   = "Terraform"
+    }
+  }
 }
 
 resource "aws_vpc" "main" {
-  cidr_block = "10.0.0.0/16"
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
 
   tags = {
     Name = "8byte-assignment-vpc"
@@ -22,43 +39,47 @@ resource "aws_vpc" "main" {
 
 resource "aws_subnet" "public_a" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block               = "10.0.1.0/24"
-  availability_zone        = "ap-south-1a"
-  map_public_ip_on_launch  = true
+  cidr_block              = "10.0.1.0/24"
+  availability_zone       = "${var.aws_region}a"
+  map_public_ip_on_launch = true
 
   tags = {
-    Name = "8byte-public-a"
+    Name                     = "8byte-public-a"
+    "kubernetes.io/role/elb" = "1"
   }
 }
 
 resource "aws_subnet" "public_b" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block               = "10.0.2.0/24"
-  availability_zone        = "ap-south-1b"
-  map_public_ip_on_launch  = true
+  cidr_block              = "10.0.2.0/24"
+  availability_zone       = "${var.aws_region}b"
+  map_public_ip_on_launch = true
 
   tags = {
-    Name = "8byte-public-b"
+    Name                     = "8byte-public-b"
+    "kubernetes.io/role/elb" = "1"
   }
 }
 
 resource "aws_subnet" "private_a" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.11.0/24"
-  availability_zone = "ap-south-1a"
+  availability_zone = "${var.aws_region}a"
 
   tags = {
-    Name = "8byte-private-a"
+    Name                              = "8byte-private-a"
+    "kubernetes.io/role/internal-elb" = "1"
   }
 }
 
 resource "aws_subnet" "private_b" {
   vpc_id            = aws_vpc.main.id
   cidr_block        = "10.0.12.0/24"
-  availability_zone = "ap-south-1b"
+  availability_zone = "${var.aws_region}b"
 
   tags = {
-    Name = "8byte-private-b"
+    Name                              = "8byte-private-b"
+    "kubernetes.io/role/internal-elb" = "1"
   }
 }
 
@@ -131,39 +152,6 @@ resource "aws_route_table_association" "private_b" {
   route_table_id = aws_route_table.private.id
 }
 
-resource "aws_security_group" "lb" {
-  name        = "8byte-lb-sg"
-  description = "Allow HTTP/HTTPS from internet"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name = "8byte-lb-sg"
-  }
-}
-
 resource "aws_security_group" "db" {
   name        = "8byte-db-sg"
   description = "Allow Postgres traffic only from EKS nodes"
@@ -199,21 +187,21 @@ resource "aws_db_subnet_group" "main" {
 }
 
 resource "aws_db_instance" "main" {
-  identifier              = "eight-byte-db"
-  engine                  = "postgres"
-  engine_version          = "16"
-  instance_class          = "db.t3.micro"
-  allocated_storage       = 20
-  storage_type            = "gp3"
-  db_name                 = "appdb"
-  username                = "dbadmin"
-  password                = var.db_password
-  db_subnet_group_name    = aws_db_subnet_group.main.name
-  vpc_security_group_ids  = [aws_security_group.db.id]
-  multi_az                = false
-  publicly_accessible     = false
-  skip_final_snapshot     = true
-  backup_retention_period = 7
+  identifier                  = "eight-byte-db"
+  engine                      = "postgres"
+  engine_version              = "16"
+  instance_class              = "db.t3.micro"
+  allocated_storage           = 20
+  storage_type                = "gp3"
+  db_name                     = "appdb"
+  username                    = "dbadmin"
+  manage_master_user_password = true
+  db_subnet_group_name        = aws_db_subnet_group.main.name
+  vpc_security_group_ids      = [aws_security_group.db.id]
+  multi_az                    = false
+  publicly_accessible         = false
+  skip_final_snapshot         = true
+  backup_retention_period     = var.rds_backup_retention_days
 
   tags = {
     Name = "8byte-db"
@@ -222,7 +210,8 @@ resource "aws_db_instance" "main" {
 
 resource "aws_ecr_repository" "app" {
   name                 = "8byte-app"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -237,7 +226,8 @@ resource "aws_ecr_repository" "app" {
 
 resource "aws_ecr_repository" "frontend" {
   name                 = "8byte-frontend"
-  image_tag_mutability = "MUTABLE"
+  image_tag_mutability = "IMMUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
@@ -270,9 +260,15 @@ resource "aws_iam_role_policy_attachment" "eks_cluster_policy" {
 }
 
 resource "aws_eks_cluster" "main" {
-  name     = "8byte-eks"
-  role_arn = aws_iam_role.eks_cluster.arn
-  version  = "1.31"
+  name                      = "8byte-eks"
+  role_arn                  = aws_iam_role.eks_cluster.arn
+  version                   = var.eks_version
+  enabled_cluster_log_types = ["api", "audit", "authenticator", "controllerManager", "scheduler"]
+
+  access_config {
+    authentication_mode                         = "API_AND_CONFIG_MAP"
+    bootstrap_cluster_creator_admin_permissions = true
+  }
 
   vpc_config {
     subnet_ids = [
@@ -283,7 +279,10 @@ resource "aws_eks_cluster" "main" {
     ]
   }
 
-  depends_on = [aws_iam_role_policy_attachment.eks_cluster_policy]
+  depends_on = [
+    aws_cloudwatch_log_group.eks_cluster,
+    aws_iam_role_policy_attachment.eks_cluster_policy
+  ]
 
   tags = {
     Name = "8byte-eks"
@@ -328,11 +327,11 @@ resource "aws_eks_node_group" "main" {
 
   scaling_config {
     desired_size = 2
-    max_size     = 3
+    max_size     = 2
     min_size     = 1
   }
 
-  instance_types = ["t3.medium"]
+  instance_types = var.eks_node_instance_types
 
   depends_on = [
     aws_iam_role_policy_attachment.eks_nodes_worker,

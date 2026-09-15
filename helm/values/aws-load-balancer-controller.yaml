@@ -1,0 +1,15 @@
+# Dynamic clusterName, region, vpcId, and role ARN are supplied from Terraform
+# outputs in the documented Helm command.
+replicaCount: 2
+
+serviceAccount:
+  create: true
+  name: aws-load-balancer-controller
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

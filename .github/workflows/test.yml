@@ -9,6 +9,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: app/backend
+
     services:
       postgres:
         image: postgres:16
@@ -40,18 +44,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        working-directory: app/backend
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt pip-audit
 
-      - name: Run tests
-        working-directory: app/backend
+      - name: Run unit and integration tests
         run: pytest test_app.py -v
 
       - name: Scan dependencies for vulnerabilities
-        working-directory: app/backend
-        run: |
-          pip install pip-audit
-          pip-audit -r requirements.txt
+        run: pip-audit -r requirements.txt
 
       - name: Notify on failure
         if: failure()
@@ -61,7 +60,7 @@ jobs:
           server_port: 465
           username: ${{ secrets.EMAIL_USERNAME }}
           password: ${{ secrets.EMAIL_PASSWORD }}
-          subject: "CI Failed: ${{ github.repository }}"
+          subject: "Tests failed: ${{ github.repository }}"
           to: ${{ vars.NOTIFY_EMAIL }}
           from: GitHub Actions
-          body: "The test workflow failed on commit ${{ github.sha }} in ${{ github.repository }}. Check the run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body: "Open the failed run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"

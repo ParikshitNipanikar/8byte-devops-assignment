@@ -1,75 +1,39 @@
-# Challenges & Resolutions
+# Challenges and Resolutions
 
-## Infrastructure (Terraform)
+## Migration to a new AWS account
 
-- Challenge1: RDS failed to create 
- "Cannot find version 16.4 for postgres" this version of Postgress is deprecated in AWS.
-  Fixed by using "engine_version = 16"
+- **Deleted source account:** The original Terraform state referenced resources in an AWS account that no longer existed. Reusing it would have produced misleading refresh failures and potentially unsafe replacement plans. The legacy local state was moved to ignored `.history/legacy-state-deleted-account/`, a new account-specific state bucket was bootstrapped, and the main stack was initialized against that clean backend.
+- **Account safety:** The AWS provider and bootstrap configuration now require an explicit account ID through `allowed_account_ids`. A correct credential with the wrong account therefore fails before resource creation.
+- **Old hardcoded identifiers:** The previous account ID, ECR URLs, RDS hostname, and public ALB URLs were embedded in workflow/manifests/docs. Image and database fields now use deployment placeholders; the workflow derives ECR URLs from `AWS_ACCOUNT_ID`.
 
-- Challenge2 terraform apply failed deleting a security group 
-  The SG still had a dependent resource attached when Terraform tried to remove it.
-  Waited for the dependent resource to finish deleting first, then re-ran apply — resolved itself on retry.
+## AWS Free Plan restrictions
 
-## EKS & Load Balancer Controller
+- **EKS nodes rejected:** The first managed node group used `t3.medium`, which this account's Free Plan rejected as ineligible. AWS reported the restriction in Auto Scaling activity. The node group had no instances or data, so it was safely replaced with two eligible `m7i-flex.large` x86 nodes while remaining within the five-vCPU regional quota.
+- **RDS backup retention rejected:** Seven-day retention was rejected by the account plan. The configurable retention was reduced to one day, and the documentation records this demo-account limitation.
+- **Cost is not zero:** EKS, NAT Gateway, ALB, and observability consume Free Plan credits. Short log/metric retention and a single NAT Gateway constrain the demo cost; prompt teardown remains important.
 
-- Challenge1: Load Balancer Controller Pods stuck in CrashLoopBackOff
-  Logs showed it couldn't auto-detect the VPC ID from EC2 instance metadata.
-  Passed vpcId explicitly via Helm --set instead of relying on auto-detection.
+## State and secrets
 
-- Challenge2: Ingress failed with UnauthorizedOperation: ec2:DescribeRouteTables
-  The controller's IAM policy (from an older doc version) was missing several required permissions.
-  Re-downloaded the latest official IAM policy JSON and applied it as a new policy version.
+- **Deprecated state locking design:** The original instructions described a DynamoDB lock table. Terraform now uses S3 native lock files (`use_lockfile = true`) with bucket encryption, versioning, and public-access blocking.
+- **Password in a local tfvars file:** A legacy database password was present in an ignored local file and appeared during validation. It was treated as compromised, quarantined with the legacy account files, and not reused. RDS now uses `manage_master_user_password`; AWS Secrets Manager owns the generated credential.
+- **Safe Kubernetes transfer:** The database password is streamed from Secrets Manager into `kubectl create secret` and is neither printed nor written to a checked-in file.
 
-- Challenge3: kubectl get ingress showed no ALB address at all
-  The EKS cluster's authentication mode didn't support the newer access-entry API yet.
-  Updated the cluster to API_AND_CONFIG_MAP mode, then created the access entry.
+## EKS and ingress
 
-## Networking (Ingress / ALB path routing)
+- **Load Balancer Controller IAM drift:** Manual `eksctl` commands and an older policy made the original installation difficult to reproduce. Terraform now owns the EKS OIDC provider, pinned official controller policy, IRSA role, and attachment. Helm receives the explicit VPC ID and service-account role.
+- **Frontend target unhealthy:** A single ingress-level `/health` path applied to both target groups, but nginx serves its health response at `/`. Health-check annotations were moved to each Service: `/health` for Flask and `/` for nginx.
+- **Slow failed-node-group deletion:** AWS held an empty failed node group in `DELETING` for about 15 minutes. The apply was kept attached and a read-only EKS check confirmed normal service-side cleanup before the replacement began.
 
-- Challenge1: Grafana returned "backend service not available" when added to the app's Ingress
-  Grafana's Service lived in a different namespace than the Ingress — Ingress can't cross namespaces.
-  Gave Grafana its own Ingress, in its own namespace, on its own dedicated ALB.
+## Monitoring and logging
 
-- Challenge2: /grafana path returned 404 even with correct routing rules
-  The catch-all / rule had a lower priority number and was matching first, before /grafana was ever checked.
-  Fixed rule order using the group.order annotation — still hit a second issue (Grafana's own subpath awareness), so ended up giving Grafana its own dedicated ALB instead, which avoided both problems entirely.
+- **ServiceMonitor not producing targets:** The backend Service needs both a named `http` port and the `app: backend` label selected by the ServiceMonitor. After applying those fields, Prometheus reported both replicas `up` with no scrape errors.
+- **Grafana/Prometheus exposure:** Separate public ALBs made monitoring convenient but exposed administrative surfaces and added cost. The maintained setup leaves them internal and documents local port-forward access.
+- **Dashboard simplicity:** Large dashboard JSON ConfigMaps made the repository difficult to explain. They were removed; the interview runbook records the PromQL queries for manually creating application and PostgreSQL dashboards. Production automation could export these dashboards or provision them through Grafana APIs.
+- **CloudWatch permissions:** The node role requires `CloudWatchAgentServerPolicy`. Terraform attaches it and pins the observability add-on version, avoiding a manual post-install fix.
 
-## CI/CD Pipeline
+## CI/CD
 
-- Challenge1: pip-audit failed the pipeline with 7 real CVEs in dependencies
-  Flask, flask-cors, and pytest were pinned to versions with known vulnerabilities.
-  Bumped all three to their patched versions — pipeline passed clean afterward.
-
-- Challenge2: deploy.yml failed at aws eks update-kubeconfig — AccessDeniedException
-  The dedicated CI/CD IAM user had ECR/EKS-cluster permissions but not eks:DescribeCluster specifically.
-  Attached an inline policy granting exactly that permission.
-
-- Challenge3: GitHub's "Required reviewers" option wasn't available for the production environment
-  That feature is a paid-tier feature for private repos on GitHub's free plan.
-  Made the repository public, which unlocks it at no cost.
-
-## Application-level Monitoring
-
-- Challenge1: Grafana dashboard panels showed no data despite the app receiving real traffic
-  Prometheus's query used a path label that only exists on one metric, not the one being queried.
-  Removed the incorrect label filter — the metric had no path label on the _total counter, only on the duration histogram.
-
-- Challenge2: Even after fixing the query, Prometheus still showed zero targets for the backend
-  The custom ServiceMonitor had genuinely never been applied — a kubectl apply from earlier in the process silently never happened.
-  Re-ran kubectl apply on the correct file and confirmed with kubectl get servicemonitor.
-
-- Challenge3: ServiceMonitor existed but Prometheus still found "no active targets"
-  The ServiceMonitor's label selector required app: backend on the Service — the Service itself had no labels at all.
-  Added labels: app: backend directly to the Service's own metadata, not just its Pod selector.
-
-## Logging
-
-- Challenge1: Fluent Bit Pods were running, but zero log groups appeared in CloudWatch
-  Fluent Bit's logs showed AccessDeniedException on every write attempt.
-  The EKS node IAM role was missing CloudWatchAgentServerPolicy — attached it, then restarted the Fluent Bit Pods.
-
-## General / Process
-
-- Challenge1: An AWS access key was accidentally pasted in plain text during setup
-  Any exposed credential is a real security risk, regardless of intent.
-  Deactivated and deleted the exposed key immediately, generated a fresh one, and made sure it never appeared anywhere again.
+- **Long-lived AWS keys:** Static GitHub secrets were replaced with a repository-restricted GitHub OIDC trust and a short-lived IAM role. The role can push only to the two application ECR repositories, describe this EKS cluster, and edit only the `default` Kubernetes namespace.
+- **Over-broad manifest apply:** Applying an entire manifest directory mixed application and monitoring lifecycles. The repository now uses separate local Helm charts for the application and observability, and installs the controller, monitoring, and app releases in their correct namespaces.
+- **Vulnerability gates:** Dependency scanning remains in the PR workflow. The deployment workflow now scans both locally built images with Trivy and blocks HIGH/CRITICAL findings before push.
+- **Manual production approval:** The workflow uses GitHub Environments. A required reviewer must still be configured in the repository's `production` Environment settings because that policy is external to workflow YAML.

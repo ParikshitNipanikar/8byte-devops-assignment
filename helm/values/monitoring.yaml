@@ -1,0 +1,57 @@
+grafana:
+  ingress:
+    enabled: false
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+prometheus:
+  additionalServiceMonitors:
+    - name: backend-monitor
+      namespaceSelector:
+        matchNames: [default]
+      selector:
+        matchLabels:
+          app: backend
+      endpoints:
+        - port: http
+          path: /metrics
+    - name: postgres-exporter
+      namespaceSelector:
+        matchNames: [default]
+      selector:
+        matchLabels:
+          app: postgres-exporter
+      endpoints:
+        - port: metrics
+          path: /metrics
+  prometheusSpec:
+    retention: 3d
+    retentionSize: 5GB
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 2Gi
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 250m
+        memory: 256Mi

@@ -1,75 +1,44 @@
-# 8Byte DevOps Assignment
+# Interview Runbook — Direct Commands
 
-AWS infrastructure and deployment automation for a Flask/nginx application on EKS with PostgreSQL, CI/CD, centralized logging, Prometheus, Grafana, and CloudWatch.
+This guide deliberately uses Terraform, Docker, kubectl, and Helm directly. No Makefile or wrapper script is involved.
 
-Deployment status: currently destroyed. AWS generates a new ALB hostname after each deployment.
+The environment is currently destroyed. Allow approximately 20–35 minutes for AWS infrastructure and another 10–20 minutes for images, Helm releases, and the ALB.
 
-For a command-by-command deployment with explanations, use [INTERVIEW_RUNBOOK.md](INTERVIEW_RUNBOOK.md).
-
-## Architecture
-
-```text
-Internet
-   |
-Public ALB
-   |-- /              -> frontend Service -> nginx Pods
-   |-- /health        -> backend Service  -> Flask Pods
-   `-- /api           -> backend Service  -> Flask Pods -> private RDS PostgreSQL
-
-VPC across ap-south-1a and ap-south-1b
-   Public subnets:  ALB, Internet Gateway, one NAT Gateway
-   Private subnets: EKS worker nodes, application Pods, RDS
-
-Prometheus/Grafana: Kubernetes, application RED, and PostgreSQL metrics
-CloudWatch: centralized application, host, dataplane, and control-plane logs
-```
-
-## Repository layout
-
-```text
-terraform-bootstrap/          S3 remote-state bucket
-terraform/                    VPC, EKS, RDS, ECR, IAM, and centralized logs
-helm/8byte-app/               App, PostgreSQL exporter, Services, and ALB Ingress
-helm/values/                  ALB controller and monitoring values
-app/backend/                  Flask API, tests, metrics, and Dockerfile
-app/frontend/                 nginx frontend and Dockerfile
-.github/workflows/            PR tests and main-branch deployment
-```
-
-## Prerequisites
-
-- AWS CLI configured for the intended account
-- Terraform `>= 1.10, < 2.0`
-- Docker, kubectl, Helm, Trivy, jq, and Git
-- AWS permission to create VPC, EKS, EC2, RDS, ECR, IAM, S3, and CloudWatch resources
-
-Verify identity first:
+## 1. Open the project and verify identity
 
 ```bash
-aws sts get-caller-identity
+cd /Users/parikshitnipanikar/8byte-devops-assignment
 export AWS_REGION=ap-south-1
 export ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+aws sts get-caller-identity
+echo "$ACCOUNT_ID"
 ```
 
-## 1. Bootstrap remote state
+**Reason:** Confirm that every following command targets AWS account `385904685559` in Mumbai.
 
-Terraform cannot use an S3 backend until the bucket exists, so this small configuration runs first.
+## 2. Create the Terraform state configuration
 
 ```bash
 cp terraform-bootstrap/terraform.tfvars.example terraform-bootstrap/terraform.tfvars
 sed -i '' "s/REPLACE_WITH_AWS_ACCOUNT_ID/$ACCOUNT_ID/" terraform-bootstrap/terraform.tfvars
+```
+
+**Reason:** Terraform requires the intended account explicitly. The provider refuses to modify a different account.
+
+## 3. Create the remote-state bucket
+
+```bash
 terraform -chdir=terraform-bootstrap init
 terraform -chdir=terraform-bootstrap fmt -check
 terraform -chdir=terraform-bootstrap validate
 terraform -chdir=terraform-bootstrap plan -out=bootstrap.tfplan
+terraform -chdir=terraform-bootstrap show -no-color bootstrap.tfplan
 terraform -chdir=terraform-bootstrap apply bootstrap.tfplan
 ```
 
-This creates an encrypted, versioned, private bucket named `8byte-terraform-state-<ACCOUNT_ID>`. State locking uses Terraform's native S3 lock file.
+**Reason:** The bootstrap creates the encrypted, private, versioned S3 bucket before the main configuration tries to use it. Terraform native S3 locking prevents concurrent state modification.
 
-## 2. Provision AWS infrastructure
-
-Create the ignored, account-specific variables file:
+## 4. Create the main Terraform configuration
 
 ```bash
 cp terraform/terraform.tfvars.example terraform/terraform.tfvars
@@ -77,7 +46,9 @@ sed -i '' "s/REPLACE_WITH_AWS_ACCOUNT_ID/$ACCOUNT_ID/" terraform/terraform.tfvar
 sed -i '' "s|YOUR_GITHUB_USERNAME/8byte-devops-assignment|ParikshitNipanikar/8byte-devops-assignment|" terraform/terraform.tfvars
 ```
 
-Initialize, validate, review, and apply:
+**Reason:** This ignored file contains the current AWS account, region, and GitHub repository trust restriction. The non-secret S3 backend location is declared directly in `backend.tf` for this single-account assignment.
+
+## 5. Provision AWS
 
 ```bash
 terraform -chdir=terraform init -reconfigure
@@ -89,23 +60,35 @@ terraform -chdir=terraform apply infra.tfplan
 terraform -chdir=terraform output
 ```
 
-Terraform creates the two-AZ VPC, private EKS nodes, private PostgreSQL RDS, ECR, IAM roles, CloudWatch observability add-on, and centralized log groups.
+**Reason:** A saved plan guarantees that apply uses the exact reviewed VPC, EKS, RDS, ECR, IAM, and centralized logging changes.
 
-## 3. Connect to EKS
+**Say:** “The ALB is public. EKS workers, Pods, and RDS remain private. One NAT Gateway is a deliberate demo cost tradeoff.”
+
+## 6. Connect kubectl to EKS
 
 ```bash
 export EKS_CLUSTER=$(terraform -chdir=terraform output -raw eks_cluster_name)
 aws eks update-kubeconfig --name "$EKS_CLUSTER" --region "$AWS_REGION" --alias 8byte-eks
-kubectl --context 8byte-eks get nodes
+kubectl --context 8byte-eks get nodes -o wide
 ```
 
-## 4. Build, scan, and push images
+**Expected:** Two worker nodes become `Ready`.
+
+## 7. Read Terraform outputs
 
 ```bash
+export VPC_ID=$(terraform -chdir=terraform output -raw vpc_id)
+export LBC_ROLE_ARN=$(terraform -chdir=terraform output -raw load_balancer_controller_role_arn)
 export BACKEND_ECR=$(terraform -chdir=terraform output -raw ecr_repository_url)
 export FRONTEND_ECR=$(terraform -chdir=terraform output -raw frontend_ecr_repository_url)
+export RDS_HOST=$(terraform -chdir=terraform output -raw rds_address)
+export RDS_SECRET_ARN=$(terraform -chdir=terraform output -raw rds_master_secret_arn)
 export IMAGE_TAG="$(git rev-parse --short=12 HEAD)-$(date -u +%Y%m%d%H%M%S)"
 ```
+
+**Reason:** Terraform remains the source of truth. Nothing AWS-specific is copied manually into Helm templates.
+
+## 8. Build and scan the images
 
 ```bash
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com"
@@ -113,18 +96,20 @@ docker build --pull --platform linux/amd64 -t "$BACKEND_ECR:$IMAGE_TAG" app/back
 docker build --pull --platform linux/amd64 -t "$FRONTEND_ECR:$IMAGE_TAG" app/frontend
 trivy image --exit-code 1 --severity HIGH,CRITICAL "$BACKEND_ECR:$IMAGE_TAG"
 trivy image --exit-code 1 --severity HIGH,CRITICAL "$FRONTEND_ECR:$IMAGE_TAG"
+```
+
+**Reason:** `linux/amd64` matches the EKS nodes even though the Mac is ARM64. Trivy blocks high and critical vulnerabilities before publishing.
+
+## 9. Push immutable images to ECR
+
+```bash
 docker push "$BACKEND_ECR:$IMAGE_TAG"
 docker push "$FRONTEND_ECR:$IMAGE_TAG"
 ```
 
-## 5. Create the database Secret
+**Reason:** The Git SHA plus timestamp makes the release traceable and prevents an immutable-tag collision during a repeated demo.
 
-```bash
-export RDS_HOST=$(terraform -chdir=terraform output -raw rds_address)
-export RDS_SECRET_ARN=$(terraform -chdir=terraform output -raw rds_master_secret_arn)
-```
-
-The password is streamed directly from Secrets Manager and is not printed or stored in Helm values:
+## 10. Create the Kubernetes database Secret
 
 ```bash
 aws secretsmanager get-secret-value \
@@ -138,11 +123,11 @@ aws secretsmanager get-secret-value \
   kubectl --context 8byte-eks apply -f -
 ```
 
-## 6. Install the ALB controller
+**Reason:** The password moves from Secrets Manager to Kubernetes without being printed, written into Helm values, or committed to Git.
+
+## 11. Install the AWS Load Balancer Controller
 
 ```bash
-export VPC_ID=$(terraform -chdir=terraform output -raw vpc_id)
-export LBC_ROLE_ARN=$(terraform -chdir=terraform output -raw load_balancer_controller_role_arn)
 helm repo add eks https://aws.github.io/eks-charts --force-update
 helm repo update eks
 ```
@@ -160,7 +145,9 @@ helm upgrade --install aws-load-balancer-controller eks/aws-load-balancer-contro
   --atomic --wait --timeout 10m
 ```
 
-## 7. Install Prometheus and Grafana
+**Reason:** The controller creates the AWS ALB from the application Ingress. IRSA supplies short-lived AWS permissions without static credentials.
+
+## 12. Install Prometheus and Grafana
 
 ```bash
 kubectl --context 8byte-eks create namespace monitoring --dry-run=client -o yaml | kubectl --context 8byte-eks apply -f -
@@ -177,7 +164,9 @@ helm upgrade --install monitoring prometheus-community/kube-prometheus-stack \
   --atomic --wait --timeout 15m
 ```
 
-## 8. Install the application chart
+**Reason:** The pinned chart installs Prometheus, Grafana, Alertmanager, node-exporter, kube-state-metrics, and standard Kubernetes dashboards.
+
+## 13. Install the application
 
 ```bash
 helm upgrade --install 8byte-app helm/8byte-app \
@@ -191,38 +180,54 @@ helm upgrade --install 8byte-app helm/8byte-app \
   --atomic --wait --timeout 5m
 ```
 
-The application chart also runs PostgreSQL Exporter, with its password mounted from the existing Kubernetes Secret. The monitoring values create the Flask and PostgreSQL ServiceMonitors. No dashboard JSON is stored in the repository.
+**Reason:** One local chart owns the frontend, backend, PostgreSQL Exporter, Services, probes, and Ingress. The same chart is used by GitHub Actions. The exporter password is mounted from the existing Secret rather than stored in Helm values.
 
-## 9. Access the application and Grafana
+The monitoring values create ServiceMonitors for Flask and PostgreSQL Exporter. Dashboard panels will be created manually in Grafana, so there is no large dashboard JSON in the repository.
+
+## 14. Verify everything
+
+```bash
+kubectl --context 8byte-eks get nodes
+kubectl --context 8byte-eks get pods,services,ingress -A
+helm --kube-context 8byte-eks list -A
+```
+
+**Expected:** Two ready nodes, healthy application/monitoring Pods, and three Helm releases.
+
+## 15. Get and test the URL
 
 ```bash
 kubectl --context 8byte-eks -n default get ingress 8byte-app-ingress --watch
 ```
 
-After the address appears, press `Control-C` and run:
+After the address appears, press `Control-C`:
 
 ```bash
 export APP_HOST=$(kubectl --context 8byte-eks -n default get ingress 8byte-app-ingress -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
 echo "http://$APP_HOST"
+curl -i "http://$APP_HOST/"
 curl -i "http://$APP_HOST/health"
+curl -i -X POST "http://$APP_HOST/api/visits"
 curl -i -X POST "http://$APP_HOST/api/visits"
 ```
 
-Access Grafana privately:
+**Expected:** Frontend and health return HTTP 200. The second visit count is higher, proving the private RDS write/read path.
+
+## 16. Access Grafana and create dashboards
 
 ```bash
 kubectl --context 8byte-eks -n monitoring port-forward service/monitoring-grafana 3000:80
 ```
 
-Open <http://localhost:3000>. Username: `admin`. Retrieve the generated password in another terminal:
+Open <http://localhost:3000>. Username: `admin`. Retrieve the password in a private second terminal:
 
 ```bash
 kubectl --context 8byte-eks -n monitoring get secret monitoring-grafana -o jsonpath='{.data.admin-password}' | base64 --decode
 ```
 
-Create dashboards manually in Grafana using the Prometheus data source.
+In Grafana, select **Dashboards → New → New dashboard → Add visualization**, then choose the Prometheus data source.
 
-Application dashboard queries:
+Create an `8Byte Application RED Metrics` dashboard with these queries:
 
 ```promql
 sum(rate(flask_http_request_total[5m]))
@@ -236,7 +241,7 @@ sum(rate(flask_http_request_total[5m]))
 histogram_quantile(0.95, sum by (le) (rate(flask_http_request_duration_seconds_bucket[5m])))
 ```
 
-PostgreSQL dashboard queries:
+Create an `8Byte PostgreSQL Metrics` dashboard with these queries:
 
 ```promql
 max(pg_up)
@@ -251,34 +256,52 @@ max(pg_database_size_bytes{datname="appdb"})
 ```
 
 ```promql
+sum(pg_locks_count{datname="appdb"})
+```
+
+```promql
 sum(rate(pg_stat_database_xact_commit{datname="appdb"}[5m]))
 ```
 
-The monitoring chart already includes standard Kubernetes/node dashboards for CPU, memory, and filesystem usage.
+Also show the standard Kubernetes CPU, memory, and filesystem dashboards installed by the monitoring chart.
 
-## CI/CD
+## 17. Show centralized CloudWatch logs
 
-The PR workflow runs unit/integration tests and `pip-audit`. The main workflow builds and scans images, authenticates to AWS with GitHub OIDC, deploys with the local application Helm chart, deploys staging, waits for production approval, and notifies on failure.
+```bash
+aws logs describe-log-groups --log-group-name-prefix /aws/containerinsights/8byte-eks --region "$AWS_REGION"
+aws logs describe-log-groups --log-group-name-prefix /aws/eks/8byte-eks --region "$AWS_REGION"
+```
 
-Configure GitHub variables `AWS_ACCOUNT_ID`, `RDS_HOST`, and `NOTIFY_EMAIL`. Configure `EMAIL_USERNAME` and `EMAIL_PASSWORD` as secrets when email notification is enabled. Add a required reviewer to the `production` GitHub Environment.
+**Reason:** Prometheus and Grafana own all dashboards. CloudWatch remains focused on centralized application, host, dataplane, performance, and EKS control-plane logging.
 
-## Teardown
+## 18. Teardown after the interview
 
-Delete Helm resources while the ALB controller is still available:
+Confirm the account again:
+
+```bash
+aws sts get-caller-identity
+```
+
+Delete the Ingress while its controller is still running:
 
 ```bash
 helm --kube-context 8byte-eks uninstall 8byte-app --namespace default --ignore-not-found
 ```
 
-Wait until the application ALB disappears, then run:
+Wait until the AWS ALB disappears. Then remove the remaining releases:
 
 ```bash
 helm --kube-context 8byte-eks uninstall monitoring --namespace monitoring --ignore-not-found
 helm --kube-context 8byte-eks uninstall aws-load-balancer-controller --namespace kube-system --ignore-not-found
 kubectl --context 8byte-eks -n default delete secret db-credentials --ignore-not-found
+```
+
+Review and apply the Terraform destroy plan:
+
+```bash
 terraform -chdir=terraform plan -destroy -out=destroy.tfplan
 terraform -chdir=terraform show -no-color destroy.tfplan
 terraform -chdir=terraform apply destroy.tfplan
 ```
 
-The S3 state bucket is retained because `prevent_destroy` protects it from accidental state loss.
+**Reason:** ECR uses `force_delete`, so images do not need manual cleanup. The protected S3 state bucket remains as versioned recovery history.

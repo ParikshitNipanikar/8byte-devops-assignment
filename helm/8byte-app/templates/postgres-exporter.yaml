@@ -1,0 +1,84 @@
+{{- if .Values.postgresExporter.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-exporter
+  labels:
+    app: postgres-exporter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres-exporter
+  template:
+    metadata:
+      labels:
+        app: postgres-exporter
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres-exporter
+          image: "{{ .Values.postgresExporter.image.repository }}:{{ .Values.postgresExporter.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresExporter.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: DATA_SOURCE_URI
+              value: "{{ required "database.host is required" .Values.database.host }}:{{ .Values.database.port }}/{{ .Values.database.name }}?sslmode=require"
+            - name: DATA_SOURCE_USER
+              value: {{ .Values.database.user | quote }}
+            - name: DATA_SOURCE_PASS_FILE
+              value: /etc/postgres-exporter/password
+          ports:
+            - name: metrics
+              containerPort: 9187
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: metrics
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+{{ toYaml .Values.postgresExporter.resources | indent 12 }}
+          volumeMounts:
+            - name: database-password
+              mountPath: /etc/postgres-exporter
+              readOnly: true
+      volumes:
+        - name: database-password
+          secret:
+            secretName: {{ .Values.database.passwordSecretName }}
+            items:
+              - key: password
+                path: password
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-exporter
+  labels:
+    app: postgres-exporter
+spec:
+  selector:
+    app: postgres-exporter
+  ports:
+    - name: metrics
+      port: 9187
+      targetPort: metrics
+  type: ClusterIP
+{{- end }}
